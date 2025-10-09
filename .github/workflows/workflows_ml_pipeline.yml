@@ -46,9 +46,9 @@ jobs:
           path: logs/
 
       - name: Upload artifacts (model + metrics)
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
-          name: sticker-model-artifacts-${{ github.run_id }}
+          name: sticker-model-artifacts
           path: artifacts/
 
       - name: Append metrics to summary
