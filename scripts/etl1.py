@@ -12,7 +12,17 @@ from pathlib import Path
 import wbgapi as wb
 import holidays
 import logging
+import os
 
+# === Paths ===
+RAW_PATH = Path("data/sticker_sales.csv")       # Input dataset
+PROCESSED_PATH = Path("processed/cleaned.csv")  # Output dataset
+PROCESSED_PATH.parent.mkdir(parents=True, exist_ok=True)
+
+# Ensure logs directory exists
+os.makedirs("logs", exist_ok=True)
+
+# Then configure logging
 # Basic logging configuration
 logging.basicConfig(
     level=logging.INFO,  # can be DEBUG, INFO, WARNING, ERROR, CRITICAL
@@ -23,13 +33,6 @@ logging.basicConfig(
     ]
 )
 logger = logging.getLogger(__name__)
-
-
-# === Paths ===
-RAW_PATH = Path("data/sticker_sales.csv")       # Input dataset
-PROCESSED_PATH = Path("processed/cleaned.csv")  # Output dataset
-PROCESSED_PATH.parent.mkdir(parents=True, exist_ok=True)
-
 
 # === GDP Fetcher ===
 def fetch_gdp_data(df, indicator="NY.GDP.PCAP.CD"):
