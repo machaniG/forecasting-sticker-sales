@@ -3,7 +3,7 @@ name: Daily Sticker Sales ML Pipeline
 
 on:
   schedule:
-    - cron: "0 8 * * *"   # Daily at  08:00 am UTC (which is 10:00 am Berlin Time)
+    - cron: "0 9 * * *"   # Daily at  09:00 am UTC (which is 11:00 am Berlin Time)
   workflow_dispatch:
 
 jobs:
@@ -60,6 +60,7 @@ jobs:
           else
             echo "No metrics found" >> $GITHUB_STEP_SUMMARY
           fi
+
 
 
 
