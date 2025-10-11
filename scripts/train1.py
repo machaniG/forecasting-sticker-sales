@@ -78,7 +78,10 @@ def prepare_features(df):
 
     numerical_features = df.drop([target_column, date_col, id_col], axis=1, errors="ignore") \
                            .select_dtypes(include="number").columns.tolist()
-    categorical_features = df.select_dtypes(include=["object", "category", "bool"]).columns.tolist()
+    categorical_features = [
+        c for c in df.select_dtypes(include=["object", "category", "bool"]).columns
+        if c not in [target_column, date_col, id_col] ]
+
     
     #preprocessor
 
