@@ -30,6 +30,7 @@ sticker-sales-mlops-pipeline/
 
 │ └── train.py # Model training, evaluation, and saving artifacts
 │
+
 ├── artifacts/ # Trained models and evaluation metrics
 
 │ └── .gitkeep
