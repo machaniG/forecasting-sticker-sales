@@ -88,6 +88,7 @@ def run_etl():
     logger.info(f"Loaded {len(df)} rows from {RAW_PATH}")
 
     # 2️⃣ Basic Cleaning
+    df.dropna(subset=["num_sold"], inplace=True)
     df["date"] = pd.to_datetime(df["date"], errors="coerce")
     df.dropna(subset=["date"], inplace=True)
     df["year"] = df["date"].dt.year
