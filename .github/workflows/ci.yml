@@ -24,7 +24,9 @@ jobs:
           pip install -r requirements.txt
 
       - name: Run unit and integration tests
-        run: pytest --maxfail=2 --disable-warnings
+        run: |
+          export PYTHONPATH="${PYTHONPATH}:$(pwd)"
+          pytest --maxfail=2 --disable-warnings
 
       - name: Run linter (flake8)
         run: |
