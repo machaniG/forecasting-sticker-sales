@@ -7,7 +7,14 @@ from sklearn.pipeline import Pipeline
 from sklearn.compose import ColumnTransformer
 from sklearn.preprocessing import StandardScaler, OneHotEncoder
 from sklearn.metrics import mean_absolute_percentage_error
+
 import logging
+import mlflow
+import mlflow.sklearn
+from datetime import datetime
+import subprocess
+import shap
+import matplotlib.pyplot as plt
 
 
 PROCESSED_PATH = Path("processed/cleaned.csv")
@@ -121,30 +128,94 @@ def evaluate_model(model, X_val, y_val):
 
 # training models
 def run_training():
+
     df = pd.read_csv(PROCESSED_PATH)
     logger.info(f"Columns in processed dataset: {list(df.columns)}")
     X_train, y_train, X_val, y_val, preprocessor = prepare_features(df)
 
     pipelines = build_models(preprocessor)
-
     results = {}
-    for name, pipe in pipelines.items():
-        logger.info(f"\nTraining {name.upper()}...")
-        pipe.fit(X_train, y_train)
-        mape = evaluate_model(pipe, X_val, y_val)
-        results[name] = mape
-        logger.info(f"{name.upper()} MAPE: {mape:.4f}")
+    best_model_name = None
+    best_mape = float('inf')
+    best_pipeline = None
 
-        # save models
-        joblib.dump(pipe, ARTIFACTS_DIR / f"{name}_pipeline.joblib")
+    # Get git commit hash
+    try:
+        commit = subprocess.check_output(['git', 'rev-parse', 'HEAD']).decode('utf-8').strip()
+    except Exception:
+        commit = "unknown"
 
-    # save metrics
-    metrics_text = "\n".join([f"{m.upper()}: {v:.4f}" for m, v in results.items()])
-    with open(ARTIFACTS_DIR / "metrics.txt", "w") as f:
-        f.write(metrics_text)
+    mlflow.set_tracking_uri("file:./mlruns")  # Local tracking by default
+    experiment_name = "StickerSalesPrediction"
+    mlflow.set_experiment(experiment_name)
 
-    logger.info("Training complete. Pipelines and metrics saved to artifacts/")
-    logger.info(metrics_text)
+
+    run_id = datetime.now().strftime('%Y%m%d_%H%M%S')
+    with mlflow.start_run(run_name=f"train_{run_id}") as run:
+        for name, pipe in pipelines.items():
+            logger.info(f"\nTraining {name.upper()}...")
+            pipe.fit(X_train, y_train)
+            mape = evaluate_model(pipe, X_val, y_val)
+            results[name] = mape
+            logger.info(f"{name.upper()} MAPE: {mape:.4f}")
+
+            # Log params, metrics, and model to MLflow
+            mlflow.log_param("model_name", name)
+            mlflow.log_params(MODELS[name]["params"])
+            mlflow.log_metric("mape", mape)
+
+            # Save model artifact with versioning
+            model_path = ARTIFACTS_DIR / f"{name}_pipeline_{run_id}_{commit}.joblib"
+            joblib.dump(pipe, model_path)
+            mlflow.log_artifact(str(model_path))
+
+            # SHAP plot
+            try:
+                explainer = None
+                if name == "xgb":
+                    explainer = shap.Explainer(pipe.named_steps["model"], X_train)
+                elif name == "rf":
+                    explainer = shap.TreeExplainer(pipe.named_steps["model"])
+                if explainer is not None:
+                    shap_values = explainer(X_val)
+                    plt.figure()
+                    shap.summary_plot(shap_values, X_val, show=False)
+                    shap_path = ARTIFACTS_DIR / f"shap_{name}_{run_id}_{commit}.png"
+                    plt.savefig(shap_path)
+                    plt.close()
+                    mlflow.log_artifact(str(shap_path))
+            except Exception as e:
+                logger.warning(f"Could not generate SHAP plot for {name}: {e}")
+
+            # Track best model
+            if mape < best_mape:
+                best_mape = mape
+                best_model_name = name
+                best_pipeline = pipe
+
+        # Save metrics with versioning
+        metrics_path = ARTIFACTS_DIR / f"metrics_{run_id}_{commit}.txt"
+        metrics_text = "\n".join([f"{m.upper()}: {v:.4f}" for m, v in results.items()])
+        with open(metrics_path, "w") as f:
+            f.write(metrics_text)
+        mlflow.log_artifact(str(metrics_path))
+
+        # Register the best model
+        if best_pipeline is not None:
+            logger.info(f"Registering best model: {best_model_name} (MAPE={best_mape:.4f})")
+            mlflow.sklearn.log_model(
+                sk_model=best_pipeline,
+                artifact_path="model",
+                registered_model_name="StickerSalesBestModel"
+            )
+            # Log version metadata
+            mlflow.log_param("best_model", best_model_name)
+            mlflow.log_metric("best_mape", best_mape)
+            mlflow.set_tag("commit", commit)
+            mlflow.set_tag("train_date", datetime.now().isoformat())
+
+        logger.info("Training complete. Pipelines, metrics, and MLflow logs saved.")
+        logger.info(metrics_text)
 
 
 if __name__ == "__main__":

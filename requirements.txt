@@ -20,3 +20,15 @@ pyyaml>=6.0
 lightgbm>=4.0
 catboost>=1.2
 
+# API and web server
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+pydantic>=2.4.2
+python-multipart>=0.0.6
+
+# Testing
+pytest>=7.0
+httpx>=0.25
+
+# Experiment tracking and model registry
+mlflow>=2.0

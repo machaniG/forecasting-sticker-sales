@@ -1,0 +1,46 @@
+name: Build and Push Docker Image
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Set image tags
+        id: vars
+        run: |
+          DATE_TAG=$(date +'%Y%m%d')
+          echo "date_tag=$DATE_TAG" >> $GITHUB_OUTPUT
+          # Optionally, extract model version from a file or artifact
+          MODEL_VERSION="v${GITHUB_RUN_NUMBER}"
+          echo "model_version=$MODEL_VERSION" >> $GITHUB_OUTPUT
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: |
+            ${{ secrets.DOCKERHUB_USERNAME }}/sticker-sales-mlops:latest
+            ${{ secrets.DOCKERHUB_USERNAME }}/sticker-sales-mlops:${{ steps.vars.outputs.date_tag }}
+            ${{ secrets.DOCKERHUB_USERNAME }}/sticker-sales-mlops:${{ steps.vars.outputs.model_version }}
