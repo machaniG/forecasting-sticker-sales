@@ -6,6 +6,7 @@ preprocessing steps, ensuring consistency.
 """
 
 import pandas as pd
+import numpy as np
 import logging
 import mlflow.sklearn
 from mlflow.tracking import MlflowClient

@@ -8,7 +8,7 @@ by unit tests (tests/test_core_unit.py) from their original locations
 The main serving application is now in serving_app.py.
 """
 from scripts.train1 import prepare_features
-from scripts.predict import pipeline as load_model 
+from scripts.predict import load_production_model as load_model 
 # NOTE: We use the pipeline object instantiated in predict.py 
 # as the 'load_model' reference for testing purposes.
 # If predict.py only defined a function, we would import that function.
