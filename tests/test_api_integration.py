@@ -73,5 +73,15 @@ def test_single_prediction_endpoint_validation_error(api_client: TestClient):
     
     # Asserting against the standard Pydantic validation error structure
     assert "detail" in data
-    # Check that the validation error specifically mentions the missing 'date' field
-    assert any(err['loc'][-1] == 'date' for err in data['detail'])
+    
+    # FIX: Use a more robust check to ensure we find the 'date' field in the error location list.
+    found_date_error = False
+    for error in data['detail']:
+        # Ensure 'loc' key exists and is iterable
+        if 'loc' in error and isinstance(error['loc'], list):
+            # The name of the missing field is the last element in the location list
+            if error['loc'][-1] == 'date':
+                found_date_error = True
+                break
+    
+    assert found_date_error, f"Expected validation error for 'date' field, but found errors: {data['detail']}"
