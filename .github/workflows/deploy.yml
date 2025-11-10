@@ -1,10 +1,20 @@
 name: Build and Push Docker Image
 
 on:
-  push:
-    branches:
-      - main
-  workflow_dispatch:
+  # Changed from push/workflow_dispatch to workflow_call
+  workflow_call:
+    secrets:
+      DOCKERHUB_USERNAME:
+        required: true
+      DOCKERHUB_TOKEN:
+        required: true
+    inputs:
+      # Optional input: allows the orchestrator to pass a specific tag (e.g., model version) 
+      # if the default run number tag is not desired.
+      deploy_tag_suffix:
+        required: false
+        type: string
+        default: '' # Default to empty, which triggers the use of the run number
 
 jobs:
   build-and-push:
@@ -28,11 +38,18 @@ jobs:
       - name: Set image tags
         id: vars
         run: |
-          DATE_TAG=$(date +'%Y%m%d')
-          echo "date_tag=$DATE_TAG" >> $GITHUB_OUTPUT
-          # Optionally, extract model version from a file or artifact
-          MODEL_VERSION="v${GITHUB_RUN_NUMBER}"
-          echo "model_version=$MODEL_VERSION" >> $GITHUB_OUTPUT
+          # Use run number as the default version tag
+          RUN_TAG="v${{ github.run_number }}"
+          
+          # Use the deploy_tag_suffix input if provided, otherwise use the run tag
+          TAG_SUFFIX="${{ inputs.deploy_tag_suffix }}"
+          
+          if [ -z "$TAG_SUFFIX" ]; then
+            TAG_SUFFIX="$RUN_TAG"
+          fi
+          
+          echo "tag_suffix=$TAG_SUFFIX" >> $GITHUB_OUTPUT
+          echo "date_tag=$(date +'%Y%m%d')" >> $GITHUB_OUTPUT
 
       - name: Build and push Docker image
         uses: docker/build-push-action@v5
@@ -43,4 +60,4 @@ jobs:
           tags: |
             ${{ secrets.DOCKERHUB_USERNAME }}/sticker-sales-mlops:latest
             ${{ secrets.DOCKERHUB_USERNAME }}/sticker-sales-mlops:${{ steps.vars.outputs.date_tag }}
-            ${{ secrets.DOCKERHUB_USERNAME }}/sticker-sales-mlops:${{ steps.vars.outputs.model_version }}
+            ${{ secrets.DOCKERHUB_USERNAME }}/sticker-sales-mlops:${{ steps.vars.outputs.tag_suffix }}

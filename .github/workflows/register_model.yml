@@ -1,10 +1,17 @@
 name: Register Model in MLflow
 
 on:
-  workflow_run:
-    workflows: ["Build and Push Docker Image"]
-    types:
-      - completed
+  # Changed from workflow_run to workflow_call
+  workflow_call:
+    inputs:
+      pipeline_run_id:
+        required: true
+        type: string
+        description: 'The run ID of the calling workflow (ci_cd_orchestrator) to retrieve artifacts from the previous step.'
+    secrets:
+      MLFLOW_TRACKING_URI:
+        required: true
+        description: 'MLflow tracking URI for registration.'
 
 jobs:
   register-model:
@@ -23,9 +30,17 @@ jobs:
           python -m pip install --upgrade pip
           pip install mlflow scikit-learn xgboost pandas
 
+      # Retrieve artifacts (the trained model and metrics) from the pipeline run
+      - name: Download Model Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          # The name must match the upload name in pipeline.yml
+          name: sticker-model-artifacts-${{ inputs.pipeline_run_id }}
+          path: artifacts/ # Downloads content to the 'artifacts/' directory
+
       - name: Register model in MLflow
         env:
           MLFLOW_TRACKING_URI: ${{ secrets.MLFLOW_TRACKING_URI }}
         run: |
-          python scripts/train1.py
-          # Optionally, add a separate script for registration if needed
+          # Register the best model from the downloaded artifacts using promote_model.py
+          python scripts/promote_model.py --artifacts_dir artifacts/

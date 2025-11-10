@@ -54,6 +54,9 @@ app.add_middleware(
 
 # Model paths
 MODEL_PATH = Path("artifacts/xgb_pipeline.joblib")
+PROCESSED_PATH = Path("data/processed/cleaned.csv")
+PIPELINE_PATH = Path("artifacts/inference_pipeline.joblib")
+pipeline = None
 
 # Data models
 class SalesPredictionInput(BaseModel):
@@ -105,25 +108,8 @@ model = None
 @app.on_event("startup")
 async def startup_event():
     """Load model on application startup."""
-    global model
-    model = load_model()
-
-def prepare_features(data: pd.DataFrame) -> pd.DataFrame:
-    """Prepare features for prediction."""
-    try:
-        # Convert date to datetime
-        data['date'] = pd.to_datetime(data['date'])
-        
-        # Add temporal features
-        data['year'] = data['date'].dt.year
-        data['month'] = data['date'].dt.month
-        data['weekday'] = data['date'].dt.weekday
-        data['weekofyear'] = data['date'].dt.isocalendar().week
-        
-        return data
-    except Exception as e:
-        logger.error(f"Error preparing features: {e}")
-        raise ValueError(f"Feature preparation failed: {e}")
+    global pipeline
+    pipeline = joblib.load(PIPELINE_PATH)
 
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request, exc):
@@ -144,15 +130,13 @@ async def predict_sales(input_data: SalesPredictionInput):
     """
     Predict sales for a single input.
     """
-    if model is None:
-        raise HTTPException(status_code=503, detail="Model not loaded. Please train and register a model.")
+    if pipeline is None:
+        raise HTTPException(status_code=503, detail="Inference pipeline not loaded.")
     try:
-        # Convert input to DataFrame
         df = pd.DataFrame([input_data.dict()])
-        df = prepare_features(df)
-        prediction = model.predict(df)[0]
+        predictions, enriched = pipeline.predict(df)
         return SalesPredictionResponse(
-            predicted_sales=float(prediction),
+            predicted_sales=float(predictions[0]),
             prediction_date=datetime.now().isoformat(),
             model_version="1.0.0"
         )
@@ -165,16 +149,11 @@ async def predict_batch(file: UploadFile = File(...)):
     """
     Predict sales for multiple inputs from a CSV file.
     """
-    if model is None:
-        raise HTTPException(status_code=503, detail="Model not loaded. Please train and register a model.")
+    if pipeline is None:
+        raise HTTPException(status_code=503, detail="Inference pipeline not loaded.")
     try:
         df = pd.read_csv(file.file)
-        required_columns = ["country", "store", "product", "date"]
-        missing_cols = set(required_columns) - set(df.columns)
-        if missing_cols:
-            raise HTTPException(status_code=400, detail=f"Missing required columns: {missing_cols}")
-        df = prepare_features(df)
-        predictions = model.predict(df)
+        predictions, enriched = pipeline.predict(df)
         return BatchPredictionResponse(
             predictions=predictions.tolist(),
             mean_prediction=float(np.mean(predictions)),
@@ -192,7 +171,7 @@ async def health_check():
     """
     return {
         "status": "healthy",
-        "model_loaded": model is not None,
+        "model_loaded": pipeline is not None,
         "timestamp": datetime.now().isoformat()
     }
 
