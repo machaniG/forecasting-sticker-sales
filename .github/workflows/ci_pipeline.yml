@@ -24,10 +24,6 @@ jobs:
     name: Run CI Steps
     runs-on: ubuntu-latest
 
-    # Use secrets passed from the calling workflow (orchestrator)
-    env:
-      MLFLOW_TRACKING_URI: ${{ secrets.MLFLOW_TRACKING_URI }}
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -48,5 +44,8 @@ jobs:
         run: pytest tests/
 
       - name: 🤖 Run Model Training (MLflow Tracking)
+        # Use secrets passed from the calling workflow (orchestrator)  
+        env:
+          MLFLOW_TRACKING_URI: ${{ secrets.MLFLOW_TRACKING_URI }}
         # Use the input parameter 'commit_sha' provided by the calling workflow
         run: python -m scripts.train1 ${{ inputs.commit_sha }}
