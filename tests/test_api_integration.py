@@ -22,6 +22,7 @@ requires_model = pytest.mark.skipif(
 
 # --- Define an async client fixture for proper pytest/httpx integration ---
 @pytest.fixture
+@pytest.mark.asyncio # MANDATORY: Ensures the async fixture is executed correctly by pytest-asyncio
 async def async_client():
     """Provides an httpx.AsyncClient instance wrapped around the FastAPI app."""
     # Using 'async with' ensures correct setup and teardown of the client connection.

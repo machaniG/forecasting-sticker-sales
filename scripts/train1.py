@@ -62,12 +62,33 @@ def get_git_commit():
     return commit
 
 # --- Main Feature & Pipeline Definition ---
+def prepare_features(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Apply a simplified feature preparation logic for unit testing purposes.
+    In the main training pipeline, this is done by FeatureEnrichmentTransformer.
+    This function mimics the *minimum* required preparation before the transformer runs.
+    """
+    df = df.copy()
+    
+    # 1. Date conversion (MANDATORY before temporal feature creation)
+    df["date"] = pd.to_datetime(df["date"], errors="coerce")
+    df.dropna(subset=["date"], inplace=True)
 
-def prepare_features(df):
-    """Placeholder: The real feature prep happens inside the FeatureEnrichmentTransformer."""
-    # This function is retained primarily for unit testing the transformer logic
-    enrichment_step = FeatureEnrichmentTransformer(target_column=target_column)
-    return enrichment_step.fit_transform(df)
+    # 2. Add year column (REQUIRED for TRAIN_MASK and unit testing assertion)
+    df["year"] = df["date"].dt.year
+    
+    # 3. Apply the full transformer pipeline
+    # NOTE: This is necessary to generate the rest of the features 
+    # (month, day, weekday, lag, rolling, etc.) for the assertion test to pass on column names.
+    enricher = FeatureEnrichmentTransformer(target_column=target_column)
+    # Fit_transform is used here because the unit test runs without a previously fitted model
+    df_transformed = enricher.fit_transform(df) 
+    
+    # Drop the date column which is no longer needed in the final feature set
+    if date_col in df_transformed.columns:
+        df_transformed = df_transformed.drop(columns=[date_col])
+
+    return df_transformed
 
 
 def create_pipeline(regressor, target_column):
