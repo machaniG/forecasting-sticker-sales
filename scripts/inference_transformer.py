@@ -17,8 +17,6 @@ logger = logging.getLogger(__name__)
 
 def _fetch_gdp_data(df, indicator="NY.GDP.PCAP.CD"):
     """Fetch and prepare GDP data (static function for reuse)."""
-    # NOTE: In a real-world deployed environment, dynamic API calls should be avoided
-    # or rely on a feature store/cached database. For this exercise, we keep the call.
     
     # Ensure 'year' is present for the API call filter
     if 'year' not in df.columns:
@@ -41,13 +39,12 @@ def _fetch_gdp_data(df, indicator="NY.GDP.PCAP.CD"):
     logger.info(f"🌍 Fetching GDP data for {len(country_codes)} countries and years {min_year}-{max_year}...")
 
     try:
-        # Fetch data. WBGAPI will attempt to map country names to codes.
+        # Fetch data. Removed 'numeric_times=True' as it caused a warning in the logs.
         df_gdp_wide = wb.data.DataFrame(
             indicator, 
             country_filter, 
             time=time_filter, 
-            numeric_times=True,
-            columns='series', 
+            columns='series', # Ensure columns are indicator series
             time_filter=time_filter
         )
         
@@ -66,7 +63,8 @@ def _fetch_gdp_data(df, indicator="NY.GDP.PCAP.CD"):
 
         # Keep only the required columns and ensure types match
         df_gdp = df_gdp[["country", "year", "gdp_per_capita"]]
-        df_gdp["year"] = df_gdp["year"].astype(int)
+        # Ensure year is an integer type, though it might come as string (e.g., 'YR2015') from the API
+        df_gdp["year"] = df_gdp["year"].astype(str).str.replace('YR', '').astype(int)
         
         logger.info(f"✅ Successfully fetched GDP data for {len(df_gdp['country'].unique())} countries.")
         return df_gdp
@@ -107,7 +105,8 @@ class FeatureEnrichmentTransformer(BaseEstimator, TransformerMixin):
         X_fit = X.copy()
         
         # Ensure date is datetime type
-        if X_fit[self.target_column].dtype != 'datetime64[ns]':
+        # Check for dtype to avoid erroring out if the column is already datetime
+        if not pd.api.types.is_datetime64_any_dtype(X_fit["date"]):
              X_fit["date"] = pd.to_datetime(X_fit["date"], errors="coerce")
         
         # 1️⃣ Time-based Features (Needed for subsequent steps like GDP)
@@ -150,11 +149,11 @@ class FeatureEnrichmentTransformer(BaseEstimator, TransformerMixin):
         X_transformed["date"] = pd.to_datetime(X_transformed["date"], errors="coerce")
         
         # 1️⃣ Time-based Features
-        # FIX: Ensure 'year' is created and retained.
         X_transformed["year"] = X_transformed["date"].dt.year
         X_transformed["month"] = X_transformed["date"].dt.month
         X_transformed["day"] = X_transformed["date"].dt.day
-        X_transformed["weekday"] = X_transformed["date"].dt.weekday
+        # FIX: Renamed 'weekday' to 'dayofweek' to match unit test
+        X_transformed["dayofweek"] = X_transformed["date"].dt.dayofweek 
         
         # The .dt.isocalendar().week returns a non-integer Series in recent pandas, so ensure conversion
         X_transformed["weekofyear"] = X_transformed["date"].dt.isocalendar().week.astype(int)
