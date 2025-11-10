@@ -46,4 +46,4 @@ jobs:
       - name: 🤖 Run Model Training (MLflow Tracking)
         # Use secrets passed from the calling workflow (orchestrator)  
         run: |
-          MLFLOW_TRACKING_URI: ${{ secrets.MLFLOW_TRACKING_URI }} python -m scripts.train1 ${{ inputs.commit_sha }}
+          "MLFLOW_TRACKING_URI=${{ secrets.MLFLOW_TRACKING_URI }} python -m scripts.train1 ${{ inputs.commit_sha }}"
