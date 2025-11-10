@@ -42,11 +42,11 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: 🛠️ Run ETL (Data Preprocessing)
-        run: python etl.py
+        run: python etl1.py
         
       - name: 🧪 Run Unit Tests
         run: pytest tests/
 
       - name: 🤖 Run Model Training (MLflow Tracking)
         # Use the input parameter 'commit_sha' provided by the calling workflow
-        run: python train.py ${{ inputs.commit_sha }}
+        run: python train1.py ${{ inputs.commit_sha }}
