@@ -15,6 +15,9 @@ import logging
 from fastapi.responses import JSONResponse
 from fastapi.exception_handlers import RequestValidationError
 from fastapi import status
+# Import the custom transformer (required to load the pipeline)
+from scripts.inference_transformer import FeatureEnrichmentTransformer 
+
 
 # Ensure the logs directory exists
 os.makedirs("logs", exist_ok=True)
@@ -53,87 +56,74 @@ app.add_middleware(
 )
 
 # Model paths
-MODEL_PATH = Path("artifacts/xgb_pipeline.joblib")
-PROCESSED_PATH = Path("data/processed/cleaned.csv")
-PIPELINE_PATH = Path("artifacts/inference_pipeline.joblib")
+MODEL_PATH = Path("artifacts/xgb_pipeline.pkl") 
 pipeline = None
 
-# Data models
-class SalesPredictionInput(BaseModel):
-    """Input data model for sales prediction."""
-    country: str = Field(..., description="Country code (e.g., US, UK)")
-    store: str = Field(..., description="Store identifier")
-    product: str = Field(..., description="Product identifier")
-    date: str = Field(..., description="Date in YYYY-MM-DD format")
-    gdp_per_capita: Optional[float] = Field(None, description="GDP per capita (optional)")
+def load_pipeline():
+    """Load the trained scikit-learn pipeline."""
+    global pipeline
+    try:
+        if not MODEL_PATH.exists():
+             logger.warning(f"Pipeline file not found at {MODEL_PATH}. Attempting fallback load from MLflow...")
+             # NOTE: In a real environment, you'd integrate MLflow here to load the model
+             # from the registry if it's not present locally.
+             # For now, we'll keep the local load logic, but if this fails, pipeline remains None.
+             pipeline = None
+             return
 
-    class Config:
-        json_schema_extra = {
-            "example": {
-                "country": "US",
-                "store": "Store_123",
-                "product": "Sticker_ABC",
-                "date": "2025-11-07",
-                "gdp_per_capita": 65000.0
-            }
-        }
+        pipeline = joblib.load(MODEL_PATH)
+        logger.info(f"Inference pipeline loaded successfully from {MODEL_PATH}")
+    except Exception as e:
+        logger.error(f"Failed to load pipeline: {e}")
+        pipeline = None
+
+# Load the pipeline on startup
+load_pipeline()
+
+# === Pydantic Schemas for API Input/Output ===
+class SalesPredictionRequest(BaseModel):
+    date: str = Field(..., description="Date of the prediction (YYYY-MM-DD)")
+    country: str = Field(..., description="Country code (e.g., US, CA, UK)")
+    store: str = Field("NA", description="Store name/ID")
+    product: str = Field("NA", description="Product category/ID")
 
 class SalesPredictionResponse(BaseModel):
-    """Response model for sales prediction."""
-    predicted_sales: float = Field(..., description="Predicted number of sales")
-    prediction_date: str = Field(..., description="Date of prediction")
+    predicted_sales: float = Field(..., description="Predicted number of stickers sold")
+    prediction_date: str = Field(..., description="Timestamp of the prediction")
     model_version: str = Field(..., description="Version of the model used")
 
 class BatchPredictionResponse(BaseModel):
-    """Response model for batch predictions."""
-    predictions: List[float] = Field(..., description="List of predictions")
-    mean_prediction: float = Field(..., description="Mean of all predictions")
+    predictions: List[float] = Field(..., description="List of predicted sales for all rows")
+    mean_prediction: float = Field(..., description="Mean of all predicted sales")
     count: int = Field(..., description="Number of predictions made")
     model_version: str = Field(..., description="Version of the model used")
 
-# Model loading
-def load_model(model_path: Path = MODEL_PATH):
-    """Load the trained model pipeline."""
-    try:
-        model = joblib.load(model_path)
-        logger.info(f"Model loaded successfully from {model_path}")
-        return model
-    except Exception as e:
-        logger.error(f"Error loading model: {e}")
-        raise RuntimeError(f"Failed to load model: {e}")
-
-# Global model instance
-model = None
-
-@app.on_event("startup")
-async def startup_event():
-    """Load model on application startup."""
-    global pipeline
-    pipeline = joblib.load(PIPELINE_PATH)
-
+# === Exception Handlers ===
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request, exc):
+    """Custom handler for Pydantic validation errors."""
     return JSONResponse(
         status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-        content={"detail": exc.errors(), "body": exc.body},
+        content={"detail": "Validation Error", "errors": exc.errors()},
     )
 
-@app.exception_handler(Exception)
-async def general_exception_handler(request, exc):
-    return JSONResponse(
-        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        content={"detail": str(exc)},
-    )
+# === API Endpoints ===
 
 @app.post("/predict", response_model=SalesPredictionResponse)
-async def predict_sales(input_data: SalesPredictionInput):
+async def predict(request: SalesPredictionRequest):
     """
-    Predict sales for a single input.
+    Predict sales for a single input record.
     """
     if pipeline is None:
         raise HTTPException(status_code=503, detail="Inference pipeline not loaded.")
+    
     try:
-        df = pd.DataFrame([input_data.dict()])
+        # 1. Convert Pydantic model to DataFrame row
+        input_data = request.model_dump()
+        df = pd.DataFrame([input_data])
+        
+        # 2. Predict
+        # The pipeline.predict method is assumed to return predictions and enriched features (which we ignore here)
         predictions, enriched = pipeline.predict(df)
         return SalesPredictionResponse(
             predicted_sales=float(predictions[0]),
@@ -177,4 +167,4 @@ async def health_check():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info")
+    uvicorn.run(app, host="0.0.0.0", port=8000)
