@@ -7,7 +7,7 @@ from sklearn.pipeline import Pipeline
 from sklearn.compose import ColumnTransformer
 from sklearn.preprocessing import StandardScaler, OneHotEncoder
 from sklearn.metrics import mean_absolute_percentage_error
-from scripts.inference_transformer import FeatureEnrichmentTransformer # NEW IMPORT!
+from scripts.inference_transformer import FeatureEnrichmentTransformer 
 
 import logging
 import mlflow
@@ -22,6 +22,8 @@ import matplotlib.pyplot as plt
 PROCESSED_PATH = Path("processed/base_cleaned.csv")
 ARTIFACTS_DIR = Path("artifacts")
 ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
+# Define fallback path for local testing (MUST match predict.py)
+LOCAL_FALLBACK_PATH = ARTIFACTS_DIR / "test_pipeline.joblib" 
 
 problem_type = "regression"
 target_column = "num_sold"
@@ -34,183 +36,137 @@ VAL_MASK = lambda df: (df["date"].dt.year >= 2016) & (df["date"].dt.year <= 2017
 
 
 # Basic logging configuration
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(message)s",
-    handlers=[
-        logging.FileHandler("logs/train.log"), # Changed log name
-        logging.StreamHandler()
-    ]
+logging.basicConfig(\
+    level=logging.INFO,\
+    format="%(asctime)s - %(levelname)s - %(message)s",\
+    handlers=[\
+        logging.FileHandler("logs/train.log"), # Changed log name\
+        logging.StreamHandler()\
+    ]\
 )
-logger = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)\
 
 
 # model configurations
-MODELS = {
-    "xgb": {
-        "class": XGBRegressor,
-        "params": {
-            "n_estimators": 500,
-            "learning_rate": 0.03,
-            "max_depth": 7,
-            "reg_alpha": 0.1,
-            "reg_lambda": 1.0,
-            "subsample": 0.8,
-            "colsample_bytree": 0.8,
-            "tree_method": "hist",
-            "random_state": 42,
-            "n_jobs": -1,
-            "objective": "reg:squarederror"
-        }
-    },
-    "rf": {
-        "class": RandomForestRegressor,
-        "params": {
-            "n_estimators": 200,
-            "max_depth": 10,
-            "random_state": 42,
-            "n_jobs": -1
-        }
-    }
+model_configs = {
+    "RandomForest": RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=-1),
+    "XGBoost": XGBRegressor(n_estimators=100, random_state=42, n_jobs=-1)
 }
 
+# --- Utility to get current commit hash for MLflow tagging ---
+def get_git_commit():
+    try:
+        commit = subprocess.check_output(['git', 'rev-parse', 'HEAD']).strip().decode('utf-8')
+    except subprocess.CalledProcessError:
+        commit = "no-git-repo"
+    return commit
+
+# --- Main Feature & Pipeline Definition ---
 
 def prepare_features(df):
-    """
-    Defines the ColumnTransformer for the standard Scikit-learn steps 
-    AFTER the custom ETL transformer has run.
-    """
+    """Placeholder: The real feature prep happens inside the FeatureEnrichmentTransformer."""
+    # This function is retained primarily for unit testing the transformer logic
+    enrichment_step = FeatureEnrichmentTransformer(target_column=target_column)
+    return enrichment_step.fit_transform(df)
+
+
+def create_pipeline(regressor, target_column):
+    """Creates the full end-to-end Scikit-learn pipeline."""
     
-    # Run the ETL transformer first to create all the required columns
-    etl_transformer = FeatureEnrichmentTransformer(target_column=target_column)
+    # 1. Feature Engineering (Custom Transformer)
+    enrichment_step = ('enrichment', FeatureEnrichmentTransformer(target_column=target_column))
+
+    # 2. Preprocessing (Standard Scaling for numerical, One-Hot for categorical)
+    # Define columns after enrichment (e.g., year, month, day, is_holiday, lag_1, rolling_7, gdp_per_capita)
     
-    # We fit the ETL transformer manually on the training data BEFORE splitting the pipeline.
-    # We pass the target column in the fit/transform step for lag/rolling feature calculation.
-    train_mask = TRAIN_MASK(df)
-    val_mask = VAL_MASK(df)
-
-    X_train_raw = df[train_mask].drop(columns=[target_column], errors="ignore")
-    y_train = df[train_mask][target_column]
-    X_val_raw = df[val_mask].drop(columns=[target_column], errors="ignore")
-    y_val = df[val_mask][target_column]
-
-    # Fit the ETL transformer on raw training data (X_train_raw) and its target (y_train)
-    etl_transformer.fit(X_train_raw, y_train) 
+    # Example columns that will exist AFTER the FeatureEnrichmentTransformer runs:
+    numerical_features = ['year', 'month', 'day', 'dayofweek', 'weekofyear', 'lag_1', 'rolling_7', 'gdp_per_capita']
+    categorical_features = ['country', 'store', 'product'] 
     
-    # Transform all data using the fitted ETL transformer
-    X_train = etl_transformer.transform(X_train_raw)
-    X_val = etl_transformer.transform(X_val_raw)
+    # Create the column transformer
+    preprocessor = ColumnTransformer(
+        transformers=[
+            ('num', StandardScaler(), numerical_features),
+            ('cat', OneHotEncoder(handle_unknown='ignore'), categorical_features)
+        ],
+        # The remainder columns (like ID, original date, etc.) will be dropped by default.
+        remainder='drop' 
+    )
 
-    # --- Feature Selection for Scikit-learn Preprocessing ---
-    # These are the columns created by the ETL step and the base data
+    # 3. Final Pipeline: Enrichment -> Preprocessing -> Regressor
+    pipeline = Pipeline(steps=[
+        enrichment_step, 
+        ('preprocessor', preprocessor), 
+        ('regressor', regressor)
+    ])
     
-    # Identify features *after* ETL transformation
-    numerical_features = X_train.drop(columns=[id_col], errors="ignore") \
-                                 .select_dtypes(include="number").columns.tolist()
-    
-    # Remove features that are already numbers but should be treated as categories/IDs
-    exclude_from_scaling = ['year', 'month', 'day', 'weekday', 'weekofyear', 'is_holiday'] 
-    numerical_features = [f for f in numerical_features if f not in exclude_from_scaling]
-    
-    # Identify categorical/temporal features for OHE
-    categorical_features = [
-        c for c in X_train.columns
-        if c not in numerical_features and c not in [id_col]
-    ]
+    return pipeline, numerical_features # Return numerical features for SHAP
 
-    # --- Scikit-learn Preprocessor ---
-    # This only handles scaling and encoding of the now-generated features
-    preprocessor = ColumnTransformer([
-        ("cat", OneHotEncoder(handle_unknown="ignore", sparse_output=False), categorical_features),
-        ("num", StandardScaler(), numerical_features)
-    ], remainder="passthrough")
+# --- Main Training Function ---
 
-    return X_train_raw, y_train, X_val_raw, y_val, etl_transformer, preprocessor
-
-# model pipeline
-
-def build_models(etl_transformer, preprocessor):
-    pipelines = {}
-    for name, cfg in MODELS.items():
-        # The final pipeline now consists of 3 steps: 
-        # 1. FeatureEnrichmentTransformer (runs ETL)
-        # 2. ColumnTransformer (runs OHE/Scaling)
-        # 3. Final Model
-        pipelines[name] = Pipeline([
-            ("etl_features", etl_transformer), # Step 1: Runs ALL ETL features
-            ("preprocessor", preprocessor),   # Step 2: Runs Scaling/Encoding
-            ("model", cfg["class"](**cfg["params"]))  # Step 3: Runs the final model
-        ])
-    return pipelines
-
-# model evaluation 
-def evaluate_model(model, X_val_raw, y_val):
-    """Note: Evaluation now takes the RAW input data for transformation."""
-    preds = model.predict(X_val_raw)
-    # Ensure no negative predictions for MAPE calculation if applicable
-    preds[preds < 0] = 0
-    return mean_absolute_percentage_error(y_val, preds)
-
-# training models
 def run_training():
-
-    df = pd.read_csv(PROCESSED_PATH)
-    # Ensure 'date' column is datetime for TRAIN_MASK/VAL_MASK to work
-    df[date_col] = pd.to_datetime(df[date_col], errors='coerce')
+    commit = get_git_commit()
+    run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
     
-    logger.info(f"Columns in processed dataset: {list(df.columns)}")
-    X_train_raw, y_train, X_val_raw, y_val, etl_transformer, preprocessor = prepare_features(df)
+    mlflow.set_tracking_uri(os.environ.get("MLFLOW_TRACKING_URI", "file:./mlruns"))
+    mlflow.set_experiment("sticker-sales-forecasting")
     
-    pipelines = build_models(etl_transformer, preprocessor)
-    results = {}
-    best_model_name = None
-    best_mape = float('inf')
-    best_pipeline = None
+    with mlflow.start_run(run_name=f"Training Run {run_id}") as run:
+        
+        # Load and split data
+        try:
+            df = pd.read_csv(PROCESSED_PATH)
+            df[date_col] = pd.to_datetime(df[date_col])
+        except FileNotFoundError:
+            logger.error(f"Processed file not found at {PROCESSED_PATH}. Run ETL first.")
+            return
 
-    # Get git commit hash
-    try:
-        commit = subprocess.check_output(['git', 'rev-parse', 'HEAD']).decode('utf-8').strip()
-    except Exception:
-        commit = "unknown"
+        df_train = df[TRAIN_MASK(df)].copy()
+        df_val = df[VAL_MASK(df)].copy()
 
-    mlflow.set_tracking_uri("file:./mlruns")  # Local tracking by default
-    experiment_name = "StickerSalesPrediction"
-    mlflow.set_experiment(experiment_name)
+        X_train, y_train = df_train.drop(columns=[target_column]), df_train[target_column]
+        X_val, y_val = df_val.drop(columns=[target_column]), df_val[target_column]
+        
+        logger.info(f"Train size: {len(X_train)}, Validation size: {len(X_val)}")
+        
+        # MLflow metadata
+        mlflow.log_param("commit", commit)
+        mlflow.log_param("train_start_date", df_train[date_col].min().strftime('%Y-%m-%d'))
+        mlflow.log_param("val_end_date", df_val[date_col].max().strftime('%Y-%m-%d'))
+        
+        best_mape = float('inf')
+        best_model_name = ""
+        best_pipeline = None
+        results = {}
 
-
-    run_id = datetime.now().strftime('%Y%m%d_%H%M%S')
-    with mlflow.start_run(run_name=f"train_{run_id}") as run:
-        for name, pipe in pipelines.items():
-            logger.info(f"\nTraining {name.upper()}...")
-            # Fit the entire end-to-end pipeline on raw data
-            # The pipeline runs ETL -> Preprocessing -> Model Training
-            pipe.fit(X_train_raw, y_train)
+        for name, regressor in model_configs.items():
+            logger.info(f"Starting training for {name}...")
+            pipe, numerical_features = create_pipeline(regressor, target_column)
             
-            # Evaluate using the raw validation data
-            mape = evaluate_model(pipe, X_val_raw, y_val)
+            # Train model
+            pipe.fit(X_train, y_train)
+            
+            # Predict and evaluate
+            y_pred = pipe.predict(X_val)
+            y_pred = np.maximum(0, y_pred) # Ensure no negative sales
+            mape = mean_absolute_percentage_error(y_val, y_pred)
             results[name] = mape
-            logger.info(f"{name.upper()} MAPE: {mape:.4f}")
-
-            # Log params, metrics, and model to MLflow
-            mlflow.log_param("model_name", name)
-            mlflow.log_params(MODELS[name]["params"])
-            mlflow.log_metric("mape", mape)
-
-            # Save model artifact (The complete pipeline)
-            model_path = ARTIFACTS_DIR / f"{name}_pipeline.joblib"
-            joblib.dump(pipe, model_path)
-            mlflow.log_artifact(str(model_path))
-
-            # SHAP plot logic is complex with ColumnTransformer and custom steps.
-            # Skipping complex SHAP plot generation for brevity and pipeline focus.
+            
+            logger.info(f"{name} MAPE: {mape:.4f}")
+            mlflow.log_metric(f"val_mape_{name}", mape)
+            
+            # Logging model artifact (optional, but useful for inspection)
             try:
-                # Log model using mlflow.sklearn which handles pipelines well
                 mlflow.sklearn.log_model(
                     sk_model=pipe,
-                    artifact_path=f"model_{name}"
+                    artifact_path=f"model_{name}",
+                    registered_model_name=None # Do not register individual models
                 )
             except Exception as e:
                 logger.warning(f"Could not log MLflow model artifact for {name}: {e}")
+
+            # Optional: SHAP Plot generation (requires model to be saved)
+            # (SHAP code omitted for brevity/stability)
 
             # Track best model
             if mape < best_mape:
@@ -233,6 +189,12 @@ def run_training():
                 artifact_path="best_model", # Log under a generic path for registration
                 registered_model_name="StickerSalesBestModel"
             )
+            
+            # --- CRITICAL STEP: Save local fallback for testing ---
+            logger.info(f"Saving best model locally to {LOCAL_FALLBACK_PATH} for testing/CI fallback.")
+            joblib.dump(best_pipeline, LOCAL_FALLBACK_PATH)
+            # ----------------------------------------------------
+
             # Log version metadata
             mlflow.log_param("best_model", best_model_name)
             mlflow.log_metric("best_mape", best_mape)
@@ -240,8 +202,6 @@ def run_training():
             mlflow.set_tag("train_date", datetime.now().isoformat())
 
         logger.info("Training complete. Complete pipeline, metrics, and MLflow logs saved.")
-        logger.info(metrics_text)
-
 
 if __name__ == "__main__":
     run_training()
