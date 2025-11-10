@@ -4,10 +4,6 @@ from scripts.serving_app import app # Import the FastAPI application instance
 from datetime import datetime
 
 # --- FIX: Define the asynchronous client fixture correctly ---
-# This fixture uses FastAPI's TestClient wrapped by httpx.AsyncClient
-# to simulate an actual API call. The 'async' tests that use this fixture 
-# must be marked with @pytest.mark.asyncio (or use pytest-asyncio's auto-async).
-
 @pytest.fixture(scope="module")
 async def async_client():
     """Provides an asynchronous HTTP client for the FastAPI app."""
@@ -32,7 +28,7 @@ async def test_health_check_endpoint(async_client: httpx.AsyncClient):
 
 @pytest.mark.asyncio
 async def test_single_prediction_endpoint_success(async_client: httpx.AsyncClient):
-    """Test the /predict/single endpoint with valid input."""
+    """Test the /predict endpoint with valid input."""
     # This input must match the Pydantic model structure in serving_app.py
     valid_input = {
         "date": "2024-01-10",
@@ -41,13 +37,13 @@ async def test_single_prediction_endpoint_success(async_client: httpx.AsyncClien
         "product": "Sticker1",
     }
     
-    response = await async_client.post("/predict/single", json=valid_input)
+    # FIX: Using the correct endpoint /predict
+    response = await async_client.post("/predict", json=valid_input)
     
     # 1. Assert Status Code
-    # The first run might fail if the model hasn't been trained and registered.
-    # We will assert for 200, assuming a model is available.
     if response.status_code != 200:
         # Check for 503 if the model is not loaded (common during CI initial setup)
+        # This allows the test to pass if the model artifact is missing.
         assert response.status_code == 503, f"Expected 200 or 503, got {response.status_code}: {response.text}"
     
     if response.status_code == 200:
@@ -59,17 +55,33 @@ async def test_single_prediction_endpoint_success(async_client: httpx.AsyncClien
         
 @pytest.mark.asyncio
 async def test_single_prediction_endpoint_validation_error(async_client: httpx.AsyncClient):
-    """Test the /predict/single endpoint with invalid input (missing field)."""
+    """Test the /predict endpoint with invalid input (missing fields)."""
     invalid_input = {
         "date": "2024-01-10",
         "country": "Australia",
-        # 'store' and 'product' are missing
+        # Missing 'store' and 'product', which have defaults, but let's test a missing field that doesn't have a default.
+        # Rerunning with the original Pydantic schema: only 'date' and 'country' are strictly required if others have defaults.
+        # Let's ensure a required field is missing.
+        # The schema in serving_app.py has: 'date' and 'country' required. 'store' and 'product' have defaults ("NA").
     }
-    
-    response = await async_client.post("/predict/single", json=invalid_input)
+    # To trigger a 422, we must omit 'date' or 'country'
+    invalid_input_missing_date = {
+        "country": "US",
+        "store": "East",
+        "product": "TypeA"
+    }
+
+    # FIX: Using the correct endpoint /predict
+    response = await async_client.post("/predict", json=invalid_input_missing_date)
     
     # FastAPI returns 422 for validation errors
     assert response.status_code == 422
     data = response.json()
-    assert "detail" in data
-    assert any("store" in error["loc"] for error in data["detail"])
+    
+    # Asserting against the structure returned by the custom exception handler
+    assert data["detail"] == "Validation Error"
+    # The 'errors' key holds the list of Pydantic validation errors
+    assert "errors" in data
+    
+    # Check that the validation error specifically mentions the missing 'date' field
+    assert any("date" in str(error["loc"]) for error in data["errors"])
