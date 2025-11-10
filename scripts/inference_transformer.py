@@ -103,6 +103,12 @@ class FeatureEnrichmentTransformer(BaseEstimator, TransformerMixin):
         """
         X_fit = X.copy()
         
+        # 🟢 FIX: Merge the target variable (y) back into the features (X) 
+        # This is essential for calculating lag and rolling features on the target.
+        if y is not None:
+            # Ensure y is aligned using the index and assign it to the target column name
+            X_fit[self.target_column] = y.values
+        
         # Ensure date is datetime type
         if not pd.api.types.is_datetime64_any_dtype(X_fit["date"]):
              X_fit["date"] = pd.to_datetime(X_fit["date"], errors="coerce")
@@ -114,10 +120,10 @@ class FeatureEnrichmentTransformer(BaseEstimator, TransformerMixin):
         # --- Lag and Rolling Features for Median Capture ---
         X_fit = X_fit.sort_values(["country", "store", "product", "date"])
         
-        # Lag
+        # Lag - Now possible because self.target_column ('num_sold') is present in X_fit
         X_fit["lag_1"] = X_fit.groupby(["country", "store", "product"])[self.target_column].shift(1)
         
-        # Rolling
+        # Rolling - Now possible
         X_fit["rolling_7"] = X_fit.groupby(["country", "store", "product"])[self.target_column].rolling(
             7, min_periods=1
         ).mean().reset_index(level=[0, 1, 2], drop=True)
