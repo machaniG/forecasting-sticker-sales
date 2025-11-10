@@ -16,6 +16,9 @@ matplotlib>=3.7
 tqdm>=4.65
 pyyaml>=6.0
 
+# Model interpretability
+shap==0.45.0
+
 # Optional model extensions
 lightgbm>=4.0
 catboost>=1.2
