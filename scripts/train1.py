@@ -154,7 +154,7 @@ def run_training(commit):
 
         # 3. Define the Full End-to-End Pipeline
         # Step 1: Feature Enrichment (handles lag, rolling, holiday, GDP)
-        enrichment_transformer = FeatureEnrichmentTransformer(target_column=target_column, date_col=date_col)
+        enrichment_transformer = FeatureEnrichmentTransformer(target_column=target_column)
         
         # Step 2: Preprocessor (handles scaling and OHE on features created by Step 1)
         # Note: We fit the transformer on the training data BEFORE defining the preprocessor
