@@ -1,40 +1,26 @@
 import pytest
-import httpx
+# We explicitly import the synchronous TestClient, which is the most reliable 
+# way to test FastAPI apps when the underlying async client setup (like httpx) fails.
+from fastapi.testclient import TestClient 
 from scripts.serving_app import app # Import the FastAPI application instance
 from datetime import datetime
 
-# Define the asynchronous client fixture 
-# We must use httpx.AsyncClient configured to wrap the FastAPI app instance.
-# httpx, when paired with FastAPI's TestClient setup (or implicitly via the
-# app=app argument in a compatible environment), is the standard tool.
-# To bypass the TypeError, we use the fact that httpx should be able to mount
-# an ASGI app instance directly, but since the raw `httpx.AsyncClient` fails, 
-# we rely on the specific `fastapi.testclient.AsyncClient` pattern which is 
-# often used with a local URL. For unit testing, the standard approach is actually 
-# NOT to use `app=app` on `httpx.AsyncClient` but to use `fastapi.testclient.TestClient`. 
-# However, i am using async tests, let's stick to the modern httpx pattern 
-# that should be compatible with FastAPI.
-#
-# If the simple `app=app` fails, we fall back to the widely compatible
-# `TestClient` pattern, which is synchronous but often acceptable for API testing.
-# Since my tests are async, we will try the slightly older but working pattern 
-# of connecting to the app via its structure.
-
+# --- FIX: Define the synchronous client fixture ---
+# This fixture provides the TestClient instance. It is synchronous (`def`).
 @pytest.fixture(scope="module")
-async def async_client():
-    """Provides an asynchronous HTTP client for the FastAPI app."""
-    # We use the recommended pattern for testing ASGI apps with httpx.
-    # This mounts the FastAPI application instance (`app`) as the target 
-    # of the client, allowing tests to run against the app in memory.
-    async with httpx.AsyncClient(app=app, base_url="http://test") as client:
+def api_client():
+    """Provides a synchronous TestClient for the FastAPI app."""
+    # TestClient correctly mounts the ASGI application (`app`)
+    with TestClient(app) as client:
         yield client
 
-# Ensure the pytest-asyncio marker is present for async tests
-@pytest.mark.asyncio
-async def test_health_check_endpoint(async_client: httpx.AsyncClient):
+# Since the fixture is synchronous, the test functions should be synchronous too.
+# We remove @pytest.mark.asyncio and the `await` keyword.
+
+def test_health_check_endpoint(api_client: TestClient):
     """Test the /health endpoint to ensure the API is running."""
-    # ... test body remains the same
-    response = await async_client.get("/health")
+    # Use synchronous client methods
+    response = api_client.get("/health")
     
     # 1. Assert Status Code
     assert response.status_code == 200
@@ -45,10 +31,8 @@ async def test_health_check_endpoint(async_client: httpx.AsyncClient):
     assert "model_loaded" in data
     assert "timestamp" in data
 
-@pytest.mark.asyncio
-async def test_single_prediction_endpoint_success(async_client: httpx.AsyncClient):
+def test_single_prediction_endpoint_success(api_client: TestClient):
     """Test the /predict endpoint with valid input."""
-    # This input must match the Pydantic model structure in serving_app.py
     valid_input = {
         "date": "2024-01-10",
         "country": "Australia",
@@ -56,8 +40,8 @@ async def test_single_prediction_endpoint_success(async_client: httpx.AsyncClien
         "product": "Sticker1",
     }
     
-    # Using the correct endpoint /predict
-    response = await async_client.post("/predict", json=valid_input)
+    # Use synchronous client methods
+    response = api_client.post("/predict", json=valid_input)
     
     # 1. Assert Status Code
     if response.status_code != 200:
@@ -71,25 +55,23 @@ async def test_single_prediction_endpoint_success(async_client: httpx.AsyncClien
         assert data["predicted_sales"] >= 0  # Sales should be non-negative
         assert "model_version" in data
         
-@pytest.mark.asyncio
-async def test_single_prediction_endpoint_validation_error(async_client: httpx.AsyncClient):
+def test_single_prediction_endpoint_validation_error(api_client: TestClient):
     """Test the /predict endpoint with invalid input (missing fields)."""
-    # To trigger a 422, we must omit 'date' or 'country'
+    # To trigger a 422, we must omit a required field like 'date'
     invalid_input_missing_date = {
         "country": "US",
         "store": "East",
         "product": "TypeA"
     }
 
-    # Using the endpoint /predict
-    response = await async_client.post("/predict", json=invalid_input_missing_date)
+    # Use synchronous client methods
+    response = api_client.post("/predict", json=invalid_input_missing_date)
     
     # FastAPI returns 422 for validation errors
     assert response.status_code == 422
     data = response.json()
     
-    # Asserting against the structure returned by the custom exception handler
-    # Since the structure of the 422 response is custom in the API, 
-    # we assert against the known custom fields 'detail' and 'errors'.
-    # If the custom handler fails, FastAPI returns a standard Pydantic error list.
-    assert "detail" in data or "errors" in data
+    # Asserting against the standard Pydantic validation error structure
+    assert "detail" in data
+    # Check that the validation error specifically mentions the missing 'date' field
+    assert any(err['loc'][-1] == 'date' for err in data['detail'])
