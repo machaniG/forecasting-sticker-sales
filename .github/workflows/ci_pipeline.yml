@@ -1,115 +1,82 @@
-# This workflow is the primary pipeline that runs on every push and PR.
-# It handles training, model promotion (using a temporary local server),
-# building the Docker image, and pushing it to Docker Hub.
+name: "Consolidated CI/CD Pipeline"
 
-name: CI Pipeline; Test, Train, Package
-
+# This workflow is designed to be called by the Master MLOps Orchestrator.
 on:
-  # This makes the pipeline reusable and allows external triggers to pass secrets.
   workflow_call:
     inputs:
       commit_sha:
-        description: 'Git commit SHA for MLflow tracking'
-        type: string
+        description: 'The short SHA of the commit that triggered the build'
         required: true
+        type: string
     secrets:
+      # CRITICAL: Define all secrets expected from the calling workflow
       MLFLOW_TRACKING_URI:
-        required: false # Local file tracking is used for CI
-      DOCKER_USERNAME:
-        required: true # Required for Docker Hub Push
-      DOCKER_PASSWORD:
-        required: true # Required for Docker Hub Push
-
-  # This section allows the workflow to run on direct code pushes to main
-  push:
-    branches:
-      - main
-    paths-ignore:
-      - 'README.md'
-      - 'docs/**'
-
-# Define global variables
-env:
-  IMAGE_NAME: sticker-sales-mlops
+        required: true
+      # Secret names updated to match your repository settings
+      DOCKERHUB_USERNAME:
+        required: true
+      DOCKERHUB_TOKEN:
+        required: true
 
 jobs:
-  ci:
-    name: Full CI/CD Run
+  ci_cd_job:
     runs-on: ubuntu-latest
-    
-    # We only push the Docker image on successful push to the main branch
-    if: github.event_name == 'workflow_call' || github.event_name == 'push'
 
+    # Environment variables derived from inputs and secrets
+    env:
+      MLFLOW_TRACKING_URI: ${{ secrets.MLFLOW_TRACKING_URI }}
+      MMODEL_NAME: 'StickerSalesBestModel'  
+      IMAGE_NAME: 'frida33876/sticker-sales-api'
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Python
+      # --- STEP 1: Model Training, Registration, and Promotion (MLflow) ---
+      - name: Set up Python 3.10
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: '3.10'
           cache: 'pip'
+          cache-dependency-path: 'requirements.txt'
 
       - name: Install dependencies
-        run: pip install -r requirements.txt mlflow
+        run: pip install -r requirements.txt
 
-      # --- Training & Artifact Generation ---
-      - name: 🛠️ Run ETL (Data Preprocessing)
-        run: python scripts/etl1.py
-        
-      - name: 🧪 Run Unit Tests
-        run: pytest tests/
+      - name: Run Training & MLflow Tracking
+        # This script should train the model, log it to MLflow, and transition it to "Staging"
+        run: python scripts/train_model.py
 
-      - name: 🤖 Run Model Training (Local File Tracking)
-        # Sets MLFLOW_TRACKING_URI to a local directory, creating the necessary ./mlruns folder.
+      - name: Wait/Promote Model to Production
+        # This script should check the Staging model's performance/tests and, if successful,
+        # promote it to "Production" in MLflow. The script outputs the production version number.
+        id: promotion
         run: |
-          mkdir -p mlruns
-          export MLFLOW_TRACKING_URI=file:./mlruns
-          # Get SHA for tracking if called by push, otherwise use the input SHA
-          COMMIT_SHA="${{ github.event_name == 'push' && github.sha || inputs.commit_sha }}"
-          python -m scripts.train1 $COMMIT_SHA
+          PROD_VERSION=$(python scripts/promote_model.py)
+          echo "PROD_VERSION=$PROD_VERSION" >> $GITHUB_ENV
+        # Placeholder for robustness: if the script is complex, you might need a run line 
+        # to execute it and set the output variable.
 
-      # --- Model Promotion (Requires MLflow Server) ---
-      
-      - name: 🚀 Start MLflow Server (Local)
-        # We start the server in the background (&) pointing to the local mlruns folder.
-        run: |
-          mlflow server --backend-store-uri file:./mlruns --host 0.0.0.0 --port 5001 &
-          echo "Giving MLflow server 5 seconds to initialize..."
-          sleep 5
-
-      - name: 🥇 Run Model Promotion Script
-        # This script now successfully connects to the local server at 127.0.0.1:5001
-        run: python scripts/promote_model.py
-
-      - name: 🛑 Stop MLflow Server
-        # Cleanly kills the background process on port 5001
-        run: kill $(lsof -t -i:5001) || true
-        
-      # --- Docker Build and Push ---
-
+      # --- STEP 2: Docker Build and Push (Using the Production Model) ---
       - name: Login to Docker Hub
-        # This conditional ensures we only try to log in and push when running on the main branch
-        if: github.ref == 'refs/heads/main'
         uses: docker/login-action@v3
         with:
+          # REFERENCING THE CORRECT SECRET NAMES
           username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DDOCKERHUB_TOKEN }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
 
-      - name: Get Short SHA
-        id: vars
-        run: echo "sha_short=$(echo ${{ github.sha }} | cut -c1-8)" >> $GITHUB_OUTPUT
-
-      - name: Build and Push Docker Image
-        if: github.ref == 'refs/heads/main'
+      - name: Build and push Docker image
         uses: docker/build-push-action@v5
         with:
           context: .
           file: ./Dockerfile
           push: true
           tags: |
-            ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}:latest
-            ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}:${{ steps.vars.outputs.sha_short }}
+            ${{ env.IMAGE_NAME }}:${{ env.PROD_VERSION }}
+            ${{ env.IMAGE_NAME }}:latest
           build-args: |
-            # This is the temporary local URI, but it's required for the Docker build-time argument
-            MLFLOW_TRACKING_URI=file:./mlruns
+            MLFLOW_TRACKING_URI=${{ secrets.MLFLOW_TRACKING_URI }}
+            # Optionally pass the production model version as a build arg if your Dockerfile needs it
+            PROD_MODEL_VERSION=${{ env.PROD_VERSION }}
