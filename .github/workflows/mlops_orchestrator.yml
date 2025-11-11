@@ -17,59 +17,18 @@ on:
         required: false
         default: 'Manual run to test MLOps pipeline'
 
-# Note: Top-level 'env' removed to resolve validation errors when calling reusable workflows.
 # Variables are passed directly via 'secrets' or defined locally.
 
 jobs:
-  # --- STEP 1: CI/CD Pipeline (Build, Test, and Register) ---
+  # Consolidated CI/CD Pipeline (Build, Test, Register, and Push to Docker hub)
   ci_cd_pipeline:
-    name: Build, Test, and Register Model
-    # Uses a separate, reusable workflow
+    name: "Consolidated CI/CD (Build, Register, Promote, & Push Docker)"
+    # Uses the reusable workflow where all logic is now contained
     uses: ./.github/workflows/ci_pipeline.yml
     with:
       commit_sha: ${{ github.sha }}
     secrets:
       # Pass the secret directly to the reusable workflow
-      MLFLOW_TRACKING_URI: ${{ secrets.MLFLOW_TRACKING_URI }}
-
-  # --- STEP 2: Model Promotion (Stage to Production) ---
-  model_promotion:
-    name: Promote Model to Production
-    needs: ci_cd_pipeline
-    runs-on: ubuntu-latest
-    
-    # Define environment variables locally for this job's steps
-    env:
-      MLFLOW_TRACKING_URI: ${{ secrets.MLFLOW_TRACKING_URI }}
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-          cache: 'pip'
-          
-      - name: Install dependencies
-        run: pip install -r requirements.txt
-        
-      - name: Run Model Promotion Script (promote_model.py)
-        # The script uses the MLFLOW_TRACKING_URI environment variable defined above
-        run: python scripts/promote_model.py
-
-  # --- STEP 3: Docker Image Deployment ---
-  docker_deployment:
-    name: Build & Push Docker Image
-    # This job runs only after the model has been successfully promoted to Production
-    needs: model_promotion
-    uses: ./.github/workflows/deploy.yml
-    with:
-      # Hardcode or pass non-secret input directly
-      image_name: stickersales-api
-    secrets:
-      # Pass secrets directly to the reusable workflow
       MLFLOW_TRACKING_URI: ${{ secrets.MLFLOW_TRACKING_URI }}
       DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
       DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}

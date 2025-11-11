@@ -1,8 +1,11 @@
-name: CI Pipeline; Build, Test, Train
+# This workflow is the primary pipeline that runs on every push and PR.
+# It handles training, model promotion (using a temporary local server),
+# building the Docker image, and pushing it to Docker Hub.
+
+name: CI Pipeline; Test, Train, Package
 
 on:
-  # Note: The MLFLOW_TRACKING_URI secret is no longer needed here,
-  # but we keep the commit_sha input required for the script.
+  # This makes the pipeline reusable and allows external triggers to pass secrets.
   workflow_call:
     inputs:
       commit_sha:
@@ -10,9 +13,12 @@ on:
         type: string
         required: true
     secrets:
-      # This secret is unused until you deploy the external server
       MLFLOW_TRACKING_URI:
-        required: false # Changed to false or deleted to allow CI to run
+        required: false # Local file tracking is used for CI
+      DOCKER_USERNAME:
+        required: true # Required for Docker Hub Push
+      DOCKER_PASSWORD:
+        required: true # Required for Docker Hub Push
 
   # This section allows the workflow to run on direct code pushes to main
   push:
@@ -22,10 +28,17 @@ on:
       - 'README.md'
       - 'docs/**'
 
+# Define global variables
+env:
+  IMAGE_NAME: sticker-sales-mlops
+
 jobs:
   ci:
-    name: Run CI Steps
+    name: Full CI/CD Run
     runs-on: ubuntu-latest
+    
+    # We only push the Docker image on successful push to the main branch
+    if: github.event_name == 'workflow_call' || github.event_name == 'push'
 
     steps:
       - name: Checkout repository
@@ -38,8 +51,9 @@ jobs:
           cache: 'pip'
 
       - name: Install dependencies
-        run: pip install -r requirements.txt
+        run: pip install -r requirements.txt mlflow
 
+      # --- Training & Artifact Generation ---
       - name: 🛠️ Run ETL (Data Preprocessing)
         run: python scripts/etl1.py
         
@@ -47,14 +61,55 @@ jobs:
         run: pytest tests/
 
       - name: 🤖 Run Model Training (Local File Tracking)
-        # 🟢 FIX: We are setting the MLFLOW_TRACKING_URI to a local file path
-        # to ensure the script does not try to connect to 127.0.0.1 or an external server.
+        # Sets MLFLOW_TRACKING_URI to a local directory, creating the necessary ./mlruns folder.
         run: |
-          # 1. Create the local directory that MLflow will use
           mkdir -p mlruns
-          
-          # 2. Export the URI as a local file path (This is key)
           export MLFLOW_TRACKING_URI=file:./mlruns
-          
-          # 3. Run the training script, which now uses the local path
-          python -m scripts.train1 ${{ inputs.commit_sha }}
+          # Get SHA for tracking if called by push, otherwise use the input SHA
+          COMMIT_SHA="${{ github.event_name == 'push' && github.sha || inputs.commit_sha }}"
+          python -m scripts.train1 $COMMIT_SHA
+
+      # --- Model Promotion (Requires MLflow Server) ---
+      
+      - name: 🚀 Start MLflow Server (Local)
+        # We start the server in the background (&) pointing to the local mlruns folder.
+        run: |
+          mlflow server --backend-store-uri file:./mlruns --host 0.0.0.0 --port 5001 &
+          echo "Giving MLflow server 5 seconds to initialize..."
+          sleep 5
+
+      - name: 🥇 Run Model Promotion Script
+        # This script now successfully connects to the local server at 127.0.0.1:5001
+        run: python scripts/promote_model.py
+
+      - name: 🛑 Stop MLflow Server
+        # Cleanly kills the background process on port 5001
+        run: kill $(lsof -t -i:5001) || true
+        
+      # --- Docker Build and Push ---
+
+      - name: Login to Docker Hub
+        # This conditional ensures we only try to log in and push when running on the main branch
+        if: github.ref == 'refs/heads/main'
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Get Short SHA
+        id: vars
+        run: echo "sha_short=$(echo ${{ github.sha }} | cut -c1-8)" >> $GITHUB_OUTPUT
+
+      - name: Build and Push Docker Image
+        if: github.ref == 'refs/heads/main'
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: |
+            ${{ secrets.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}:latest
+            ${{ secrets.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}:${{ steps.vars.outputs.sha_short }}
+          build-args: |
+            # This is the temporary local URI, but it's required for the Docker build-time argument
+            MLFLOW_TRACKING_URI=file:./mlruns
