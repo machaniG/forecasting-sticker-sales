@@ -9,7 +9,6 @@ from pathlib import Path
 import logging
 import os
 
-# === Directory Setup (FIX for FileNotFoundError) ===
 # Ensure the logs directory exists before configuring the file handler
 Path("logs").mkdir(parents=True, exist_ok=True)
 # Ensure the raw and processed folders exist
@@ -30,7 +29,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# === Main ETL (Minimalist) ===
+# Main ETL 
 def run_etl():
     """Performs full ETL: cleaning, feature engineering, and enrichment."""
     logger.info("Starting base ETL process...")
@@ -62,6 +61,6 @@ def run_etl():
     logger.info(f"✅ Base ETL complete. Cleaned data saved to {PROCESSED_PATH}")
 
 
-# === Script entrypoint ===
+# Script entrypoint
 if __name__ == "__main__":
     run_etl()
