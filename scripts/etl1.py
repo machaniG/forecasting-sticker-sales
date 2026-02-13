@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 
 # Main ETL 
 def run_etl():
-    """Performs full ETL: cleaning, feature engineering, and enrichment."""
+    """Performs basic ETL: data cleaning."""
     logger.info("Starting base ETL process...")
 
     # 1️⃣ Extract
